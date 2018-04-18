@@ -6,6 +6,7 @@
 #include "common.h"
 
 #define NUM_THREADS 256
+#define BLOCK_WIDTH 16
 
 extern double size;
 //
@@ -33,15 +34,41 @@ __device__ void apply_force_gpu(particle_t &particle, particle_t &neighbor)
 
 __global__ void compute_forces_gpu(particle_t *particles, int n, double size)
 {
-    // Get thread (particle) ID
+
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    //int bx = threadIdx.x % BLOCK_WIDTH;
+    //int by = threadIdx.x / BLOCK_WIDTH;
+
+    //printf("bidx %d bx %d by %d tid %d\n", blockIdx.x, bx, by, tid);
+
+    //printf("tid %d particles xy (%f %f)\n",tid,particles[tid].x,particles[tid].y);
+
     if (tid >= n)
         return;
 
     particles[tid].ax = particles[tid].ay = 0;
-    for (int j = 0; j < n; j++)
+
+    //copy element into the shared memory
+    __shared__ particle_t blockShare[BLOCK_WIDTH*BLOCK_WIDTH];
+
+    blockShare[threadIdx.x].x = particles[tid].x;
+    blockShare[threadIdx.x].y = particles[tid].y;
+    blockShare[threadIdx.x].vx = particles[tid].vx;
+    blockShare[threadIdx.x].vy = particles[tid].vy;
+    blockShare[threadIdx.x].ax = particles[tid].ax;
+    blockShare[threadIdx.x].ay = particles[tid].ay;
+
+    //check
+    //printf("bx %d by %d blockSharexy (%f %f) particles xy (%f %f)\n",
+    //       bx, by, blockShare[bx][by].x, blockShare[bx][by].y, particles[tid].x, particles[tid].y);
+    
+    //only compute the particles in block
+    for (int j = 0; j < BLOCK_WIDTH; j++)
     {
-        apply_force_gpu(particles[tid], particles[j]);
+        if (j != tid)
+        {
+            apply_force_gpu(particles[tid], blockShare[j]);
+        }
     }
 
     //move_gpu part
@@ -129,7 +156,7 @@ int main(int argc, char **argv)
 
     // GPU particle data structure
     particle_t *d_particles;
-    printf("size of particles %d\n", sizeof(particle_t));
+    //printf("size of particles %d\n", sizeof(particle_t));
     cudaMalloc((void **)&d_particles, n * sizeof(particle_t));
 
     set_size(n);
@@ -158,6 +185,7 @@ int main(int argc, char **argv)
         //
 
         int blks = (n + NUM_THREADS - 1) / NUM_THREADS;
+        //printf("gpu test step %d blks %d numthread %d\n",step,blks,NUM_THREADS);
         compute_forces_gpu<<<blks, NUM_THREADS>>>(d_particles, n, size);
 
         //
