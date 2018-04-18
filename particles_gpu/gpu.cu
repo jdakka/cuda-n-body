@@ -32,7 +32,7 @@ __device__ void apply_force_gpu(particle_t &particle, particle_t &neighbor)
     particle.ay += coef * dy;
 }
 
-__global__ void compute_forces_gpu(particle_t *particles, int n, double size)
+__global__ void compute_forces_gpu(particle_t *particles, int n, double size, int blockNum)
 {
 
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -49,25 +49,41 @@ __global__ void compute_forces_gpu(particle_t *particles, int n, double size)
     particles[tid].ax = particles[tid].ay = 0;
 
     //copy element into the shared memory
-    __shared__ particle_t blockShare[BLOCK_WIDTH*BLOCK_WIDTH];
-
-    blockShare[threadIdx.x].x = particles[tid].x;
-    blockShare[threadIdx.x].y = particles[tid].y;
-    blockShare[threadIdx.x].vx = particles[tid].vx;
-    blockShare[threadIdx.x].vy = particles[tid].vy;
-    blockShare[threadIdx.x].ax = particles[tid].ax;
-    blockShare[threadIdx.x].ay = particles[tid].ay;
+    __shared__ particle_t blockShare[BLOCK_WIDTH * BLOCK_WIDTH];
 
     //check
     //printf("bx %d by %d blockSharexy (%f %f) particles xy (%f %f)\n",
     //       bx, by, blockShare[bx][by].x, blockShare[bx][by].y, particles[tid].x, particles[tid].y);
-    
-    //only compute the particles in block
-    for (int j = 0; j < BLOCK_WIDTH; j++)
+
+    //every time, copy specific block from the global memory into shared memory
+    //then only compute the particles in block
+    int offset = 0;
+    for (int b = 0; b < blockNum; b++)
     {
-        if (j != tid)
+        //if distance < cutoff continue
+        double dx = particles[tid].x - particles[offset].x;
+        double dy = particles[tid].y - particles[offset].y;
+        double r2 = dx * dx + dy * dy;
+        if (r2 > cutoff * cutoff)
         {
-            apply_force_gpu(particles[tid], blockShare[j]);
+            continue;
+        }
+
+        offset = b * BLOCK_WIDTH * BLOCK_WIDTH;
+        blockShare[threadIdx.x].x = particles[tid + offset].x;
+        blockShare[threadIdx.x].y = particles[tid + offset].y;
+        blockShare[threadIdx.x].vx = particles[tid + offset].vx;
+        blockShare[threadIdx.x].vy = particles[tid + offset].vy;
+        blockShare[threadIdx.x].ax = particles[tid + offset].ax;
+        blockShare[threadIdx.x].ay = particles[tid + offset].ay;
+        __syncthreads();
+
+        for (int j = 0; j < BLOCK_WIDTH * BLOCK_WIDTH; j++)
+        {
+            if (j != tid)
+            {
+                apply_force_gpu(particles[tid], blockShare[j]);
+            }
         }
     }
 
@@ -186,7 +202,7 @@ int main(int argc, char **argv)
 
         int blks = (n + NUM_THREADS - 1) / NUM_THREADS;
         //printf("gpu test step %d blks %d numthread %d\n",step,blks,NUM_THREADS);
-        compute_forces_gpu<<<blks, NUM_THREADS>>>(d_particles, n, size);
+        compute_forces_gpu<<<blks, NUM_THREADS>>>(d_particles, n, size, blks);
 
         //
         //  move particles
