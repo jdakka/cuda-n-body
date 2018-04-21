@@ -32,6 +32,21 @@ __device__ void apply_force_gpu(particle_t &particle, particle_t &neighbor)
     particle.ay += coef * dy;
 }
 
+__device__ int large_than_cuttof(particle_t &particle, particle_t &neighbor)
+{
+    double dx = neighbor.x - particle.x;
+    double dy = neighbor.y - particle.y;
+    double r2 = dx * dx + dy * dy;
+    if (r2 > cutoff * cutoff)
+    {
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
 __global__ void compute_forces_gpu(particle_t *particles, int n, double size, int blockNum)
 {
 
@@ -61,10 +76,10 @@ __global__ void compute_forces_gpu(particle_t *particles, int n, double size, in
     for (int b = 0; b < blockNum; b++)
     {
         //if distance < cutoff continue
-        double dx = particles[tid].x - particles[offset].x;
-        double dy = particles[tid].y - particles[offset].y;
-        double r2 = dx * dx + dy * dy;
-        if (r2 > cutoff * cutoff)
+        int ifskipa = large_than_cuttof(particles[tid], particles[offset]);
+        int ifskipb = large_than_cuttof(particles[tid], particles[offset + BLOCK_WIDTH / 2]);
+        int ifskipc = large_than_cuttof(particles[tid], particles[offset + BLOCK_WIDTH]);
+        if (ifskipa == 1 && ifskipb == 1 && ifskipc == 1)
         {
             continue;
         }
